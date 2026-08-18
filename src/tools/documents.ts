@@ -200,14 +200,19 @@ export function registerDocumentTools(server: McpServer, api: PaperlessAPI) {
               users: z.array(z.number()).optional(),
               groups: z.array(z.number()).optional(),
             })
+            .strict()
             .optional(),
           change: z
             .object({
               users: z.array(z.number()).optional(),
               groups: z.array(z.number()).optional(),
             })
+            .strict()
             .optional(),
         })
+        // strict: a misspelled action ("read") must not silently collapse
+        // into {} and clear permissions/ownership.
+        .strict()
         .optional()
         .describe(
           "For set_permissions: view/change permissions to apply. Omitted actions (view/change) and omitted users/groups lists are left untouched; an empty list [] removes all (unless merge is true). Omit entirely for owner-only changes."

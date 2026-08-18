@@ -713,4 +713,36 @@ describe("bulk_edit_documents set_permissions", () => {
 
     assert.equal(calls.bulkEditDocuments.length, 0);
   });
+
+  test("rejects malformed set_permissions input before calling Paperless", async () => {
+    const { api, calls } = createDocumentApi([]);
+
+    await withDocumentClient(api, async (client) => {
+      for (const set_permissions of [
+        { view: { groups: ["ai-agents"] } },
+        { read: { groups: [10] } },
+        { view: [10] },
+      ]) {
+        // Depending on the installed MCP SDK version, an input-schema (zod)
+        // violation either rejects with a protocol error (-32602) or resolves
+        // with a CallToolResult carrying isError: true.
+        let rejected = false;
+        let result: CallToolResult | undefined;
+        try {
+          result = (await client.callTool({
+            name: "bulk_edit_documents",
+            arguments: { documents: [1], method: "set_permissions", set_permissions },
+          })) as CallToolResult;
+        } catch {
+          rejected = true;
+        }
+        assert.ok(
+          rejected || result?.isError,
+          `expected ${JSON.stringify(set_permissions)} to be rejected`
+        );
+      }
+    });
+
+    assert.equal(calls.bulkEditDocuments.length, 0);
+  });
 });
