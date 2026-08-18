@@ -618,3 +618,99 @@ describe("select custom field value resolution in document handlers", () => {
     );
   });
 });
+
+describe("bulk_edit_documents set_permissions", () => {
+  test("sends set_permissions, owner and merge at the top level of parameters", async () => {
+    const { api, calls } = createDocumentApi([]);
+
+    await withDocumentClient(api, async (client) => {
+      const result = (await client.callTool({
+        name: "bulk_edit_documents",
+        arguments: {
+          documents: [4103],
+          method: "set_permissions",
+          set_permissions: {
+            view: { users: [], groups: [10] },
+            change: { users: [], groups: [10] },
+          },
+          owner: 3,
+          merge: true,
+        },
+      })) as CallToolResult;
+      assert.ok(!result.isError, parseToolText(result)?.error);
+    });
+
+    assert.equal(calls.bulkEditDocuments.length, 1);
+    const [documents, method, parameters] = calls.bulkEditDocuments[0];
+    assert.deepEqual(documents, [4103]);
+    assert.equal(method, "set_permissions");
+    // Paperless reads parameters["set_permissions"] directly; nesting it under
+    // another key makes the server crash with a KeyError (HTTP 500).
+    assert.deepEqual(parameters, {
+      set_permissions: {
+        view: { users: [], groups: [10] },
+        change: { users: [], groups: [10] },
+      },
+      owner: 3,
+      merge: true,
+    });
+  });
+
+  test("forwards partial permissions without filling in omitted actions or lists", async () => {
+    const { api, calls } = createDocumentApi([]);
+
+    await withDocumentClient(api, async (client) => {
+      const result = (await client.callTool({
+        name: "bulk_edit_documents",
+        arguments: {
+          documents: [1],
+          method: "set_permissions",
+          set_permissions: { view: { groups: [10] } },
+        },
+      })) as CallToolResult;
+      assert.ok(!result.isError, parseToolText(result)?.error);
+    });
+
+    // Paperless only touches the actions/lists that are present, and clears
+    // the owner when it is omitted without merge — so nothing may be added.
+    const [, , parameters] = calls.bulkEditDocuments[0];
+    assert.deepEqual(parameters, { set_permissions: { view: { groups: [10] } } });
+  });
+
+  test("owner-only changes send an empty set_permissions object", async () => {
+    const { api, calls } = createDocumentApi([]);
+
+    await withDocumentClient(api, async (client) => {
+      for (const owner of [3, null]) {
+        const result = (await client.callTool({
+          name: "bulk_edit_documents",
+          arguments: { documents: [1], method: "set_permissions", owner },
+        })) as CallToolResult;
+        assert.ok(!result.isError, parseToolText(result)?.error);
+      }
+    });
+
+    assert.deepEqual(
+      calls.bulkEditDocuments.map(([, , parameters]) => parameters),
+      [
+        { set_permissions: {}, owner: 3 },
+        { set_permissions: {}, owner: null },
+      ]
+    );
+  });
+
+  test("rejects method set_permissions with neither set_permissions nor owner", async () => {
+    const { api, calls } = createDocumentApi([]);
+
+    await withDocumentClient(api, async (client) => {
+      const result = (await client.callTool({
+        name: "bulk_edit_documents",
+        arguments: { documents: [1], method: "set_permissions", merge: true },
+      })) as CallToolResult;
+      assert.ok(result.isError, "expected an error when both are missing");
+      assert.match(parseToolText(result)?.error ?? "", /set_permissions and\/or owner/);
+    });
+
+    assert.equal(calls.bulkEditDocuments.length, 0);
+  });
+});
