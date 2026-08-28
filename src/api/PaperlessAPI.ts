@@ -19,17 +19,20 @@ import {
   Note,
   Tag,
 } from "./types";
-import { headersToObject } from "./utils";
+import { headersToObject, omitAuthorizationHeader } from "./utils";
 
 export class PaperlessAPI {
   private readonly apiVersion: string;
+  private readonly extraHeaders: Record<string, string>;
 
   constructor(
     private readonly baseUrl: string,
-    private readonly token: string
+    private readonly token: string,
+    extraHeaders: Record<string, string> = {}
   ) {
     this.baseUrl = baseUrl;
     this.token = token;
+    this.extraHeaders = omitAuthorizationHeader(extraHeaders);
     this.apiVersion = process.env.PAPERLESS_API_VERSION || "9";
   }
 
@@ -38,11 +41,12 @@ export class PaperlessAPI {
     const isJson = !options.body || typeof options.body === "string";
 
     const mergedHeaders = {
-      Authorization: `Token ${this.token}`,
       Accept: `application/json; version=${this.apiVersion}`,
       "Accept-Language": "en-US,en;q=0.9",
       ...(isJson ? { "Content-Type": "application/json" } : {}),
-      ...headersToObject(options.headers),
+      ...this.extraHeaders,
+      ...omitAuthorizationHeader(headersToObject(options.headers)),
+      Authorization: `Token ${this.token}`,
     };
 
     try {
@@ -146,8 +150,10 @@ export class PaperlessAPI {
         formData,
         {
           headers: {
-            Authorization: `Token ${this.token}`,
             Accept: `application/json; version=${this.apiVersion}`,
+            ...this.extraHeaders,
+            Authorization: `Token ${this.token}`,
+            // form-data computes the multipart boundary, so it must win here.
             ...formData.getHeaders(),
           },
         }
@@ -193,6 +199,7 @@ export class PaperlessAPI {
       `${this.baseUrl}/api/documents/${id}/download/${query}`,
       {
         headers: {
+          ...this.extraHeaders,
           Authorization: `Token ${this.token}`,
         },
         responseType: "arraybuffer",
@@ -206,6 +213,7 @@ export class PaperlessAPI {
       `${this.baseUrl}/api/documents/${id}/thumb/`,
       {
         headers: {
+          ...this.extraHeaders,
           Authorization: `Token ${this.token}`,
         },
         responseType: "arraybuffer",

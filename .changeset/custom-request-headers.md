@@ -1,0 +1,5 @@
+---
+"@baruchiro/paperless-mcp": minor
+---
+
+feat(api): support custom request headers for Paperless-NGX instances behind an authenticating reverse proxy. A proxy such as Cloudflare Access, an API gateway, or anything expecting a shared secret rejects the MCP server before Paperless ever sees the request, and there was no way to send the credentials it wants. Headers can now be set with `PAPERLESS_EXTRA_HEADERS` (a JSON object), repeated `--header "Name: value"` flags, or the new optional DXT config field, and are applied to every outbound request — list/search calls as well as uploads, downloads and thumbnails, which build their headers separately. Names and values are validated at startup, so a malformed header fails immediately instead of surfacing later as a connection error, and names are compared case-insensitively as HTTP requires. `Authorization` stays reserved for the Paperless-NGX API token: it is rejected at startup with a clear error and can no longer be displaced by configured headers or by a per-request override. Header values are treated as credentials — parse errors name the offending header but never its value.
