@@ -103,9 +103,11 @@ npx @baruchiro/paperless-mcp \
 
 `--header` takes precedence over `PAPERLESS_EXTRA_HEADERS` for the same header name, compared case-insensitively as HTTP requires. Header names and values are validated at startup, so a typo fails immediately instead of surfacing later as a connection error.
 
-`Authorization` is reserved for the Paperless-NGX API token and is rejected here, so a proxy that needs its own `Authorization` header is not supported.
+Three header names are reserved, because the client sets them itself, and configuring them is rejected rather than silently ignored: `Authorization` carries the Paperless-NGX API token, `Accept` pins the API version, and `Content-Type` follows the request body. A proxy that needs its own `Authorization` header is therefore not supported.
 
-> These headers are usually credentials. Prefer `PAPERLESS_EXTRA_HEADERS` over `--header`: command-line arguments are visible in shell history and to anyone who can list processes on the machine.
+While extra headers are configured, a redirect that leaves the configured origin is refused rather than followed, so the headers cannot reach a host you did not configure.
+
+> These headers are usually credentials, so two things follow. `PAPERLESS_URL` must use `https://` whenever extra headers are configured — a cleartext `http://` base URL is refused, apart from loopback addresses for local testing. And prefer `PAPERLESS_EXTRA_HEADERS` over `--header`: command-line arguments are visible in shell history and to anyone who can list processes on the machine.
 
 ### Example Usage
 

@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import { parseArgs } from "node:util";
-import { parseExtraHeaders } from "./api/utils";
+import { canSendCredentials, parseExtraHeaders } from "./api/utils";
 import {
   createMcpServer,
   getBearerToken,
@@ -79,6 +79,18 @@ try {
 } catch (error) {
   console.error(
     `[paperless-mcp] ${error instanceof Error ? error.message : String(error)}`
+  );
+  process.exit(1);
+}
+
+if (
+  Object.keys(resolvedExtraHeaders).length > 0 &&
+  !canSendCredentials(resolvedBaseUrl)
+) {
+  console.error(
+    "[paperless-mcp] Refusing to send configured headers to a cleartext HTTP base URL. " +
+      "Extra headers usually carry proxy credentials, so PAPERLESS_URL must use https:// " +
+      "(a loopback address is allowed for local testing)."
   );
   process.exit(1);
 }

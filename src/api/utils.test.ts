@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { omitAuthorizationHeader, parseExtraHeaders } from "./utils";
+import {
+  canSendCredentials,
+  omitHeaders,
+  parseExtraHeaders,
+  reservedHeaderNames,
+} from "./utils";
 
 test("parseExtraHeaders returns an empty object when nothing is configured", () => {
   assert.deepEqual(parseExtraHeaders(undefined, []), {});
@@ -36,12 +41,18 @@ test("parseExtraHeaders lets --header override the environment variable", () => 
   assert.deepEqual(headers, { "X-Env": "from-cli" });
 });
 
-test("parseExtraHeaders rejects an Authorization header from either source", () => {
+test("parseExtraHeaders rejects headers the client controls itself", () => {
   assert.throws(() => parseExtraHeaders('{"Authorization":"Token other"}'), {
-    message: /must not set an "Authorization" header/,
+    message: /must not set the "Authorization" header/,
   });
   assert.throws(() => parseExtraHeaders(undefined, ["authorization: Token other"]), {
-    message: /must not set an "Authorization" header/,
+    message: /must not set the "authorization" header/,
+  });
+  assert.throws(() => parseExtraHeaders('{"Accept":"text/html"}'), {
+    message: /must not set the "Accept" header/,
+  });
+  assert.throws(() => parseExtraHeaders(undefined, ["Content-Type: text/plain"]), {
+    message: /must not set the "Content-Type" header/,
   });
 });
 
@@ -134,13 +145,39 @@ test("parseExtraHeaders never echoes an invalid value in its error message", () 
   );
 });
 
-test("omitAuthorizationHeader drops any casing of the reserved header", () => {
+test("omitHeaders drops the named headers in any casing", () => {
   assert.deepEqual(
-    omitAuthorizationHeader({
-      authorization: "Token a",
-      Authorization: "Token b",
-      "X-Keep": "kept",
-    }),
+    omitHeaders(
+      {
+        authorization: "Token a",
+        Authorization: "Token b",
+        ACCEPT: "text/html",
+        "Content-Type": "text/plain",
+        "X-Keep": "kept",
+      },
+      reservedHeaderNames
+    ),
     { "X-Keep": "kept" }
   );
+
+  assert.deepEqual(
+    omitHeaders({ Authorization: "Token a", Accept: "text/html" }, [
+      "authorization",
+    ]),
+    { Accept: "text/html" }
+  );
+});
+
+test("canSendCredentials allows https and loopback, refuses cleartext elsewhere", () => {
+  assert.equal(canSendCredentials("https://paperless.example.com"), true);
+  assert.equal(canSendCredentials("http://localhost:8000"), true);
+  assert.equal(canSendCredentials("http://127.0.0.1:8000"), true);
+  assert.equal(canSendCredentials("http://[::1]:8000"), true);
+  assert.equal(canSendCredentials("http://127.0.0.2:8000"), true);
+  assert.equal(canSendCredentials("http://localhost.:8000"), true);
+  assert.equal(canSendCredentials("http://paperless.example.com"), false);
+  assert.equal(canSendCredentials("http://192.168.1.10:8000"), false);
+  assert.equal(canSendCredentials("http://127.0.0.1.example.com"), false);
+  assert.equal(canSendCredentials("ftp://localhost/paperless"), false);
+  assert.equal(canSendCredentials("not a url"), false);
 });

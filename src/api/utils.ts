@@ -38,15 +38,48 @@ export function enhanceMatchingAlgorithmArray<
   return objects.map((obj) => enhanceMatchingAlgorithm(obj));
 }
 
-const RESERVED_HEADER = "authorization";
+/**
+ * Headers this client controls itself. `Authorization` carries the Paperless-NGX
+ * API token; `Accept` pins the API version the client speaks; `Content-Type` is
+ * chosen per request from the body. Letting configuration replace any of them
+ * breaks requests in ways that are hard to trace back to the setting.
+ */
+const reservedHeaders = new Map<string, string>([
+  ["authorization", "that header carries the Paperless-NGX API token"],
+  ["accept", "that header pins the Paperless-NGX API version"],
+  ["content-type", "that header is set per request from the body"],
+]);
+
+export const reservedHeaderNames: readonly string[] = Array.from(
+  reservedHeaders.keys()
+);
+
+const loopbackHostnames = ["localhost", "localhost.", "[::1]"];
+const loopbackIPv4 = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+
+function isLoopbackHostname(hostname: string): boolean {
+  return (
+    loopbackHostnames.indexOf(hostname) !== -1 || loopbackIPv4.test(hostname)
+  );
+}
+
+/** Whether requests to this base URL stay on the machine. */
+export function isLoopbackUrl(baseUrl: string): boolean {
+  try {
+    return isLoopbackHostname(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
 
 function assertUsableHeader(name: string, value: string, source: string): void {
   if (!name) {
     throw new Error(`${source} contains a header with an empty name.`);
   }
-  if (name.toLowerCase() === RESERVED_HEADER) {
+  const reservedReason = reservedHeaders.get(name.toLowerCase());
+  if (reservedReason) {
     throw new Error(
-      `${source} must not set an "Authorization" header; that header carries the Paperless-NGX API token.`
+      `${source} must not set the "${name}" header; ${reservedReason}.`
     );
   }
   if (name === "__proto__") {
@@ -67,16 +100,17 @@ function assertUsableHeader(name: string, value: string, source: string): void {
 }
 
 /**
- * Removes any casing of `Authorization` from a header set. That header carries
- * the Paperless-NGX API token and is never sourced from configuration or from
- * a per-request override.
+ * Removes the named headers from a header set, comparing case-insensitively as
+ * HTTP requires.
  */
-export function omitAuthorizationHeader(
-  headers: Record<string, string>
+export function omitHeaders(
+  headers: Record<string, string>,
+  names: readonly string[]
 ): Record<string, string> {
+  const excluded = names.map((name) => name.toLowerCase());
   const remaining: Record<string, string> = {};
   for (const name of Object.keys(headers)) {
-    if (name.toLowerCase() !== RESERVED_HEADER) {
+    if (excluded.indexOf(name.toLowerCase()) === -1) {
       remaining[name] = headers[name];
     }
   }
@@ -84,14 +118,23 @@ export function omitAuthorizationHeader(
 }
 
 /**
- * Builds the extra headers sent with every Paperless-NGX request, from the
- * `PAPERLESS_EXTRA_HEADERS` JSON object and/or repeated `--header "Name: value"`
- * flags. CLI flags win over the environment variable, matching HTTP semantics
- * by comparing header names case-insensitively.
- *
- * Header *values* are credentials in the common case (reverse-proxy service
- * tokens), so failures report the header name at most and never the value.
+ * Whether configured headers may be sent to this base URL. They usually carry
+ * proxy credentials, so cleartext HTTP is refused — except on loopback, where
+ * nothing leaves the machine.
  */
+export function canSendCredentials(baseUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === "https:") {
+    return true;
+  }
+  return parsed.protocol === "http:" && isLoopbackHostname(parsed.hostname);
+}
+
 export function parseExtraHeaders(
   envValue?: string,
   cliHeaders: string[] = []
