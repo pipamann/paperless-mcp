@@ -20,6 +20,7 @@ import {
   Tag,
 } from "./types";
 import {
+  canSendCredentials,
   headersToObject,
   isLoopbackUrl,
   omitHeaders,
@@ -27,6 +28,28 @@ import {
 } from "./utils";
 
 type CredentialGuard = Pick<AxiosRequestConfig, "beforeRedirect" | "proxy">;
+
+/**
+ * The origin a redirect is about to be sent to. When an HTTP proxy from the
+ * environment is in use, axios rewrites `host` and `protocol` to the proxy's
+ * before this callback runs and keeps the real target in `href` — the field
+ * axios itself reads to re-apply the proxy — so `href` is consulted first.
+ */
+function redirectOrigin(options: Record<string, unknown>): string {
+  const { href, protocol, host } = options as {
+    href?: string;
+    protocol?: string;
+    host?: string;
+  };
+  if (typeof href === "string") {
+    try {
+      return new URL(href).origin;
+    } catch {
+      // Fall through to the host fields.
+    }
+  }
+  return `${protocol}//${host}`;
+}
 
 /**
  * Configured headers usually carry proxy credentials, and follow-redirects only
@@ -45,21 +68,16 @@ function createCredentialGuard(
     return {};
   }
 
-  let base: URL;
+  let origin: string;
   try {
-    base = new URL(baseUrl);
+    origin = new URL(baseUrl).origin;
   } catch {
     return {};
   }
 
-  const origin = `${base.protocol}//${base.host}`;
   const guard: CredentialGuard = {
     beforeRedirect: (options) => {
-      const { protocol, host } = options as {
-        protocol?: string;
-        host?: string;
-      };
-      const target = `${protocol}//${host}`;
+      const target = redirectOrigin(options);
       if (target !== origin) {
         throw new Error(
           `Refusing to follow a redirect from ${origin} to ${target}: the configured extra headers would be sent to it.`
@@ -88,6 +106,16 @@ export class PaperlessAPI {
     this.baseUrl = baseUrl;
     this.token = token;
     this.extraHeaders = omitHeaders(extraHeaders, reservedHeaderNames);
+    if (
+      Object.keys(this.extraHeaders).length > 0 &&
+      !canSendCredentials(baseUrl)
+    ) {
+      // The CLI checks this at startup with a friendlier message; this is the
+      // safety net for library callers, who reach the constructor directly.
+      throw new Error(
+        "Refusing to send configured headers to a cleartext HTTP base URL: they usually carry credentials, so the base URL must use https:// (loopback addresses are exempt)."
+      );
+    }
     this.credentialGuard = createCredentialGuard(baseUrl, this.extraHeaders);
     this.apiVersion = process.env.PAPERLESS_API_VERSION || "9";
   }

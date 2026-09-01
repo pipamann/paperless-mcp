@@ -25,19 +25,28 @@ const elsewhereRecorded: RecordedRequest[] = [];
 before(async () => {
   server = createServer((req, res) => {
     recorded.push({ url: req.url ?? "", headers: req.headers });
+    // Requests that arrive through a proxy carry the absolute URL, so route on the path.
+    const path = new URL(req.url ?? "/", "http://placeholder").pathname;
     req.resume();
     req.on("end", () => {
-      if (req.url === "/api/redirect-offsite/") {
+      if (path === "/api/redirect-offsite/") {
         res.writeHead(302, { Location: `${elsewhereUrl}/api/documents/` });
         res.end();
         return;
       }
-      if (req.url === "/api/redirect-local/") {
+      if (path === "/api/redirect-other-host/") {
+        res.writeHead(302, {
+          Location: "https://other.example.invalid/api/documents/",
+        });
+        res.end();
+        return;
+      }
+      if (path === "/api/redirect-local/") {
         res.writeHead(302, { Location: "/api/documents/" });
         res.end();
         return;
       }
-      if (req.url?.includes("/download/") || req.url?.includes("/thumb/")) {
+      if (path.includes("/download/") || path.includes("/thumb/")) {
         res.writeHead(200, { "Content-Type": "application/pdf" });
         res.end(Buffer.from("%PDF-1.4"));
         return;
@@ -61,6 +70,44 @@ before(async () => {
   await new Promise<void>((resolve) => elsewhere.listen(0, "127.0.0.1", resolve));
   elsewhereUrl = `http://127.0.0.1:${(elsewhere.address() as AddressInfo).port}`;
 });
+
+const proxyEnvNames = [
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  "npm_config_http_proxy",
+  "npm_config_https_proxy",
+  "npm_config_proxy",
+  "npm_config_no_proxy",
+];
+
+/** Runs `fn` with the environment pointing every request at `proxyUrl`. */
+async function withEnvProxy(
+  proxyUrl: string,
+  fn: () => Promise<void>
+): Promise<void> {
+  const saved = new Map<string, string | undefined>();
+  for (const name of proxyEnvNames) {
+    for (const key of [name, name.toUpperCase()]) {
+      saved.set(key, process.env[key]);
+      delete process.env[key];
+    }
+  }
+  process.env.http_proxy = proxyUrl;
+  process.env.https_proxy = proxyUrl;
+  try {
+    await fn();
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 after(async () => {
   await new Promise<void>((resolve, reject) =>
@@ -215,4 +262,79 @@ test("redirects are unaffected when no extra headers are configured", async () =
 
   assert.equal(elsewhereRecorded.length, 1);
   assert.equal(elsewhereRecorded[0].headers["cf-access-client-id"], undefined);
+});
+
+test("the constructor refuses a cleartext base URL off the machine while extra headers are set", () => {
+  assert.throws(
+    () => new PaperlessAPI("http://paperless.example.com", "token", extraHeaders),
+    /cleartext HTTP base URL/
+  );
+
+  // Only headers that survive sanitising count: reserved ones are dropped first.
+  assert.doesNotThrow(
+    () =>
+      new PaperlessAPI("http://paperless.example.com", "token", {
+        Authorization: "Token other",
+      })
+  );
+  assert.doesNotThrow(() => new PaperlessAPI("http://paperless.example.com", "token"));
+  assert.doesNotThrow(
+    () => new PaperlessAPI("https://paperless.example.com", "token", extraHeaders)
+  );
+  assert.doesNotThrow(() => new PaperlessAPI(baseUrl, "token", extraHeaders));
+});
+
+test("a loopback base URL bypasses a proxy from the environment while extra headers are set", async () => {
+  recorded.length = 0;
+  elsewhereRecorded.length = 0;
+
+  await withEnvProxy(elsewhereUrl, async () => {
+    await new PaperlessAPI(baseUrl, "paperless-token", extraHeaders).getDocuments();
+    assert.equal(recorded.length, 1, "the request must reach the instance directly");
+    assert.equal(
+      elsewhereRecorded.length,
+      0,
+      "the proxy must never receive the configured credentials"
+    );
+
+    // Without extra headers nothing is exempt: the proxy is honoured as before.
+    await new PaperlessAPI(baseUrl, "paperless-token").getDocuments();
+    assert.equal(elsewhereRecorded.length, 1);
+  });
+});
+
+test("behind a proxy from the environment, a same-origin redirect is still followed", async () => {
+  recorded.length = 0;
+  const instance = "https://paperless.example.invalid";
+
+  // The test server plays the proxy: axios sends it the absolute URL of the instance.
+  await withEnvProxy(baseUrl, async () => {
+    await new PaperlessAPI(instance, "paperless-token", extraHeaders).request(
+      "/redirect-local/"
+    );
+  });
+
+  assert.equal(recorded.length, 2);
+  assert.equal(recorded[1].url, `${instance}/api/documents/`);
+  assert.equal(
+    recorded[1].headers["cf-access-client-id"],
+    extraHeaders["CF-Access-Client-Id"]
+  );
+});
+
+test("behind a proxy from the environment, a redirect to another host is still refused", async () => {
+  recorded.length = 0;
+  const instance = "https://paperless.example.invalid";
+
+  await withEnvProxy(baseUrl, async () => {
+    await assert.rejects(
+      () =>
+        new PaperlessAPI(instance, "paperless-token", extraHeaders).request(
+          "/redirect-other-host/"
+        ),
+      /Refusing to follow a redirect from https:\/\/paperless\.example\.invalid to https:\/\/other\.example\.invalid/
+    );
+  });
+
+  assert.equal(recorded.length, 1, "the proxy must not be asked to reach the other host");
 });
